@@ -1,6 +1,6 @@
 """Test the Z-Wave JS config flow."""
 import asyncio
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 import pytest
 from zwave_js_server.version import VersionInfo
@@ -22,8 +22,33 @@ ADDON_DISCOVERY_INFO = {
 @pytest.fixture(name="supervisor")
 def mock_supervisor_fixture():
     """Mock Supervisor."""
-    with patch("homeassistant.components.hassio.is_hassio", return_value=True):
+    with patch(
+        "homeassistant.components.zwave_js.config_flow.is_hassio", return_value=True
+    ):
         yield
+
+
+@pytest.fixture(name="discovery_info")
+def discovery_info_fixture():
+    """Return the discovery info from the supervisor."""
+    return DEFAULT
+
+
+@pytest.fixture(name="discovery_info_side_effect")
+def discovery_info_side_effect_fixture():
+    """Return the discovery info from the supervisor."""
+    return None
+
+
+@pytest.fixture(name="get_addon_discovery_info")
+def mock_get_addon_discovery_info(discovery_info, discovery_info_side_effect):
+    """Mock get add-on discovery info."""
+    with patch(
+        "homeassistant.components.zwave_js.config_flow.async_get_addon_discovery_info",
+        side_effect=discovery_info_side_effect,
+        return_value=discovery_info,
+    ) as get_addon_discovery_info:
+        yield get_addon_discovery_info
 
 
 @pytest.fixture(name="addon_info_side_effect")
@@ -36,7 +61,7 @@ def addon_info_side_effect_fixture():
 def mock_addon_info(addon_info_side_effect):
     """Mock Supervisor add-on info."""
     with patch(
-        "homeassistant.components.hassio.async_get_addon_info",
+        "homeassistant.components.zwave_js.config_flow.async_get_addon_info",
         side_effect=addon_info_side_effect,
     ) as addon_info:
         addon_info.return_value = {}
@@ -75,7 +100,7 @@ def set_addon_options_side_effect_fixture():
 def mock_set_addon_options(set_addon_options_side_effect):
     """Mock set add-on options."""
     with patch(
-        "homeassistant.components.hassio.async_set_addon_options",
+        "homeassistant.components.zwave_js.config_flow.async_set_addon_options",
         side_effect=set_addon_options_side_effect,
     ) as set_options:
         yield set_options
@@ -84,7 +109,9 @@ def mock_set_addon_options(set_addon_options_side_effect):
 @pytest.fixture(name="install_addon")
 def mock_install_addon():
     """Mock install add-on."""
-    with patch("homeassistant.components.hassio.async_install_addon") as install_addon:
+    with patch(
+        "homeassistant.components.zwave_js.config_flow.async_install_addon"
+    ) as install_addon:
         yield install_addon
 
 
@@ -98,7 +125,7 @@ def start_addon_side_effect_fixture():
 def mock_start_addon(start_addon_side_effect):
     """Mock start add-on."""
     with patch(
-        "homeassistant.components.hassio.async_start_addon",
+        "homeassistant.components.zwave_js.config_flow.async_start_addon",
         side_effect=start_addon_side_effect,
     ) as start_addon:
         yield start_addon
