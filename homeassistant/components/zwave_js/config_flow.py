@@ -71,7 +71,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Set up flow instance."""
-        self.addon_config: Optional[dict] = None
         self.network_key: Optional[str] = None
         self.usb_path: Optional[str] = None
         self.use_addon = False
@@ -236,8 +235,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Ask for config and start Z-Wave JS add-on."""
-        if self.addon_config is None:
-            self.addon_config = await self._async_get_addon_config()
+        addon_config = await self._async_get_addon_config()
 
         errors = {}
 
@@ -250,7 +248,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDON_NETWORK_KEY: self.network_key,
             }
 
-            if new_addon_config != self.addon_config:
+            if new_addon_config != addon_config:
                 await self._async_set_addon_config(new_addon_config)
 
             assert self.hass
@@ -281,10 +279,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
                 return self._async_create_entry_from_vars()
 
-        usb_path = self.addon_config.get(CONF_ADDON_DEVICE, self.usb_path or "")
-        network_key = self.addon_config.get(
-            CONF_ADDON_NETWORK_KEY, self.network_key or ""
-        )
+        usb_path = addon_config.get(CONF_ADDON_DEVICE, self.usb_path or "")
+        network_key = addon_config.get(CONF_ADDON_NETWORK_KEY, self.network_key or "")
 
         data_schema = vol.Schema(
             {
