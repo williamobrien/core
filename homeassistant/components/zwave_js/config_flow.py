@@ -8,7 +8,7 @@ from async_timeout import timeout
 import voluptuous as vol
 from zwave_js_server.version import VersionInfo, get_server_version
 
-from homeassistant import config_entries, core, exceptions
+from homeassistant import config_entries, exceptions
 from homeassistant.components.hassio import (
     async_get_addon_discovery_info,
     async_get_addon_info,
@@ -19,6 +19,7 @@ from homeassistant.components.hassio import (
 )
 from homeassistant.components.hassio.handler import HassioAPIError
 from homeassistant.const import CONF_URL
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -43,7 +44,7 @@ ON_SUPERVISOR_SCHEMA = vol.Schema({vol.Optional(CONF_USE_ADDON, default=True): b
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_URL, default=DEFAULT_URL): str})
 
 
-async def validate_input(hass: core.HomeAssistant, user_input: dict) -> VersionInfo:
+async def validate_input(hass: HomeAssistant, user_input: dict) -> VersionInfo:
     """Validate if the user input allows us to connect."""
     ws_address = user_input[CONF_URL]
 
@@ -56,9 +57,7 @@ async def validate_input(hass: core.HomeAssistant, user_input: dict) -> VersionI
         raise InvalidInput("cannot_connect") from err
 
 
-async def async_get_version_info(
-    hass: core.HomeAssistant, ws_address: str
-) -> VersionInfo:
+async def async_get_version_info(hass: HomeAssistant, ws_address: str) -> VersionInfo:
     """Return Z-Wave JS version info."""
     async with timeout(10):
         try:
@@ -87,6 +86,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # If we install the add-on we should uninstall it on entry remove.
         self.integration_created_addon = False
         self.install_task: Optional[asyncio.Task] = None
+        self.start_task: Optional[asyncio.Task] = None
 
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -159,6 +159,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(step_id="hassio_confirm")
 
+    @callback
     def _async_create_entry_from_vars(self) -> Dict[str, Any]:
         """Return a config entry for the flow."""
         return self.async_create_entry(
@@ -186,14 +187,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self.use_addon = True
 
         if await self._async_is_addon_running():
-            await self._bootstrap_addon_setup()
             addon_config = await self._async_get_addon_config()
             self.usb_path = addon_config[CONF_ADDON_DEVICE]
             self.network_key = addon_config.get(CONF_ADDON_NETWORK_KEY, "")
-            return self._async_create_entry_from_vars()
+            return await self.async_step_finish_addon_setup()
 
         if await self._async_is_addon_installed():
-            return await self.async_step_start_addon()
+            return await self.async_step_configure_addon()
 
         return await self.async_step_install_addon()
 
@@ -208,7 +208,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="install_addon", progress_action="install_addon"
             )
 
-        assert self.hass
         try:
             await self.install_task
         except HassioAPIError as err:
@@ -217,7 +216,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         self.integration_created_addon = True
 
-        return self.async_show_progress_done(next_step_id="start_addon")
+        return self.async_show_progress_done(next_step_id="configure_addon")
 
     async def async_step_install_failed(
         self, user_input: Optional[Dict[str, Any]] = None
@@ -225,13 +224,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Add-on installation failed."""
         return self.async_abort(reason="addon_install_failed")
 
-    async def async_step_start_addon(
+    async def async_step_configure_addon(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Ask for config and start Z-Wave JS add-on."""
+        """Ask for config for Z-Wave JS add-on."""
         addon_config = await self._async_get_addon_config()
 
-        errors = {}
+        errors: Dict[str, str] = {}
 
         if user_input is not None:
             self.network_key = user_input[CONF_NETWORK_KEY]
@@ -245,17 +244,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if new_addon_config != addon_config:
                 await self._async_set_addon_config(new_addon_config)
 
-            assert self.hass
-            try:
-                await async_start_addon(self.hass, "core_zwave_js")
-            except HassioAPIError as err:
-                _LOGGER.error("Failed to start Z-Wave JS add-on: %s", err)
-                errors["base"] = "addon_start_failed"
-            else:
-                # Sleep some seconds to let the add-on start properly before connecting.
-                await asyncio.sleep(ADDON_SETUP_TIME)
-                await self._bootstrap_addon_setup()
-                return self._async_create_entry_from_vars()
+            return await self.async_step_start_addon()
 
         usb_path = addon_config.get(CONF_ADDON_DEVICE, self.usb_path or "")
         network_key = addon_config.get(CONF_ADDON_NETWORK_KEY, self.network_key or "")
@@ -268,10 +257,50 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
         return self.async_show_form(
-            step_id="start_addon", data_schema=data_schema, errors=errors
+            step_id="configure_addon", data_schema=data_schema, errors=errors
         )
 
-    async def _bootstrap_addon_setup(self) -> None:
+    async def async_step_start_addon(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Start Z-Wave JS add-on."""
+        assert self.hass
+        if not self.start_task:
+            self.start_task = self.hass.async_create_task(self._async_start_addon())
+            return self.async_show_progress(
+                step_id="start_addon", progress_action="start_addon"
+            )
+
+        try:
+            await self.start_task
+        except HassioAPIError as err:
+            _LOGGER.error("Failed to start Z-Wave JS add-on: %s", err)
+            return self.async_show_progress_done(next_step_id="start_failed")
+
+        return self.async_show_progress_done(next_step_id="finish_addon_setup")
+
+    async def async_step_start_failed(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Add-on start failed."""
+        return self.async_abort(reason="addon_start_failed")
+
+    async def _async_start_addon(self) -> None:
+        """Start the Z-Wave JS add-on."""
+        assert self.hass
+        try:
+            await async_start_addon(self.hass, "core_zwave_js")
+            # Sleep some seconds to let the add-on start properly before connecting.
+            await asyncio.sleep(ADDON_SETUP_TIME)
+        finally:
+            # Continue the flow after show progress when the task is done.
+            self.hass.async_create_task(
+                self.hass.config_entries.flow.async_configure(flow_id=self.flow_id)
+            )
+
+    async def async_step_finish_addon_setup(
+        self, user_input: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Prepare info needed to complete the config entry.
 
         Get add-on discovery info and server version info.
@@ -291,6 +320,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         self._abort_if_unique_id_configured()
+        return self._async_create_entry_from_vars()
 
     async def _async_get_addon_info(self) -> dict:
         """Return and cache Z-Wave JS add-on info."""
