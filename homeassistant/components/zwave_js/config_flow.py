@@ -38,7 +38,8 @@ CONF_USB_PATH = "usb_path"
 DEFAULT_URL = "ws://localhost:3000"
 TITLE = "Z-Wave JS"
 
-ADDON_SETUP_TIME = 10
+ADDON_SETUP_TIMEOUT = 5
+ADDON_SETUP_TIMEOUT_ROUNDS = 5
 
 ON_SUPERVISOR_SCHEMA = vol.Schema({vol.Optional(CONF_USE_ADDON, default=True): bool})
 STEP_USER_DATA_SCHEMA = vol.Schema({vol.Required(CONF_URL, default=DEFAULT_URL): str})
@@ -273,7 +274,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         try:
             await self.start_task
-        except HassioAPIError as err:
+        except (CannotConnect, HassioAPIError) as err:
             _LOGGER.error("Failed to start Z-Wave JS add-on: %s", err)
             return self.async_show_progress_done(next_step_id="start_failed")
 
@@ -291,7 +292,24 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         try:
             await async_start_addon(self.hass, "core_zwave_js")
             # Sleep some seconds to let the add-on start properly before connecting.
-            await asyncio.sleep(ADDON_SETUP_TIME)
+            for _ in range(ADDON_SETUP_TIMEOUT_ROUNDS):
+                await asyncio.sleep(ADDON_SETUP_TIMEOUT)
+                try:
+                    discovery_info = await self._async_get_addon_discovery_info()
+                    self.ws_address = (
+                        f"ws://{discovery_info['host']}:{discovery_info['port']}"
+                    )
+                    await async_get_version_info(self.hass, self.ws_address)
+                except (AbortFlow, CannotConnect) as err:
+                    _LOGGER.debug(
+                        "Add-on not ready yet, waiting %s seconds: %s",
+                        ADDON_SETUP_TIMEOUT,
+                        err,
+                    )
+                else:
+                    break
+            else:
+                raise CannotConnect("Failed to start add-on: timeout")
         finally:
             # Continue the flow after show progress when the task is done.
             self.hass.async_create_task(
@@ -307,8 +325,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         Set unique id and abort if already configured.
         """
         assert self.hass
-        discovery_info = await self._async_get_addon_discovery_info()
-        self.ws_address = f"ws://{discovery_info['host']}:{discovery_info['port']}"
+        if not self.ws_address:
+            discovery_info = await self._async_get_addon_discovery_info()
+            self.ws_address = f"ws://{discovery_info['host']}:{discovery_info['port']}"
 
         if not self.unique_id:
             try:
