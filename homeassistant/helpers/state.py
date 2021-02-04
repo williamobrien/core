@@ -22,11 +22,7 @@ from homeassistant.core import Context, State
 from homeassistant.loader import IntegrationNotFound, async_get_integration, bind_hass
 import homeassistant.util.dt as dt_util
 
-from .frame import (
-    MissingIntegrationFrame,
-    get_integration_frame,
-    report_integration,
-)
+from .frame import MissingIntegrationFrame, get_integration_frame, report_integration
 from .typing import HomeAssistantType
 
 _LOGGER = logging.getLogger(__name__)
