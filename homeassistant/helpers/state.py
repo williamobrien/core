@@ -22,7 +22,7 @@ from homeassistant.core import Context, State
 from homeassistant.loader import IntegrationNotFound, async_get_integration, bind_hass
 import homeassistant.util.dt as dt_util
 
-from .frame import MissingIntegrationFrame, get_integration_frame, report_integration
+from .frame import report
 from .typing import HomeAssistantType
 
 _LOGGER = logging.getLogger(__name__)
@@ -69,21 +69,7 @@ def get_changed_since(
 
     Deprecated. Remove after April 2021.
     """
-    integration_frame = None
-
-    try:
-        integration_frame = get_integration_frame()
-    except MissingIntegrationFrame:
-        pass
-
-    if integration_frame:
-        report_integration("uses `get_changed_since`", integration_frame)
-    else:
-        _LOGGER.warning(
-            "Detected code that uses `get_changed_since`. Please report this issue.",
-            stack_info=True,
-        )
-
+    report("uses deprecated `get_changed_since`")
     return [state for state in states if state.last_updated >= utc_point_in_time]
 
 
